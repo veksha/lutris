@@ -13,6 +13,7 @@ from lutris.installer.errors import ScriptingError
 from lutris.installer.installer_file import InstallerFile
 from lutris.services.gog import MultipleInstallerError, get_gog_download_links
 from lutris.services.humblebundle import get_humble_download_link
+from lutris.runners import import_runner
 from lutris.util import system
 from lutris.util.http import HTTPError
 from lutris.util.log import logger
@@ -238,17 +239,8 @@ class LutrisInstaller:  # pylint: disable=too-many-instance-attributes
                 config[key] = self.interpreter._substitute(value)
         return config
 
-    def write_config(self):
-        """Write the game configuration in the DB and config file"""
-        if self.extends:
-            logger.info(
-                "This is an extension to %s, not creating a new game entry",
-                self.extends,
-            )
-            return
-        configpath = make_game_config_id(self.slug)
-        config_filename = os.path.join(settings.CONFIG_DIR, "games/%s.yml" % configpath)
-
+    def get_game_config(self):
+        """Return the game configuration"""
         if self.requires:
             # Load the base game config
             required_game = get_game_by_field(self.requires, field="installer_slug")
@@ -259,30 +251,11 @@ class LutrisInstaller:  # pylint: disable=too-many-instance-attributes
         else:
             config = {"game": {}}
 
-        self.game_id = add_or_update(
-            name=self.game_name,
-            runner=self.runner,
-            slug=self.game_slug,
-            directory=self.interpreter.target_path,
-            installed=1,
-            installer_slug=self.slug,
-            parent_slug=self.requires,
-            year=self.year,
-            steamid=self.steamid,
-            configpath=configpath,
-            id=self.game_id,
-        )
-
-        game = Game(self.game_id)
-        game.config.save()
-
         # Config update
         if "system" in self.script:
             config["system"] = self._substitute_config(self.script["system"])
         if self.runner in self.script and self.script[self.runner]:
             config[self.runner] = self._substitute_config(self.script[self.runner])
-        if not self.interpreter.game_files:
-            raise RuntimeError("You haven't populated game files, fuckface")
         launcher, launcher_config = self.get_game_launcher_config(self.interpreter.game_files)
         if launcher:
             config["game"][launcher] = launcher_config
@@ -293,13 +266,44 @@ class LutrisInstaller:  # pylint: disable=too-many-instance-attributes
             except ValueError:
                 raise ScriptingError("Invalid 'game' section", self.script["game"])
             config["game"] = self._substitute_config(config["game"])
+        return config
 
+    def write_game_config(self):
+        configpath = make_game_config_id(self.slug)
+        config_filename = os.path.join(settings.CONFIG_DIR, "games/%s.yml" % configpath)
+        config = self.get_game_config()
         yaml_config = yaml.safe_dump(config, default_flow_style=False)
         with open(config_filename, "w") as config_file:
+            logger.debug("Writing game config to %s", config_filename)
             config_file.write(yaml_config)
-        game.save()
-        logger.debug("Saved game entry %s (%d)", self.game_slug, self.game_id)
+        return configpath
 
+    def save(self):
+        """Write the game configuration in the DB and config file"""
+        if self.extends:
+            logger.info(
+                "This is an extension to %s, not creating a new game entry",
+                self.extends,
+            )
+            return
+        configpath = self.write_game_config()
+        runner_inst = import_runner(self.runner)()
+        self.game_id = add_or_update(
+            name=self.game_name,
+            runner=self.runner,
+            slug=self.game_slug,
+            platform=runner_inst.get_platform(),
+            directory=self.interpreter.target_path,
+            installed=1,
+            installer_slug=self.slug,
+            parent_slug=self.requires,
+            year=self.year,
+            steamid=self.steamid,
+            configpath=configpath,
+            id=self.game_id,
+        )
+        game = Game(self.game_id)
+        game.save()
 
     def get_game_launcher_config(self, game_files):
         """Game options such as exe or main_file can be added at the root of the
