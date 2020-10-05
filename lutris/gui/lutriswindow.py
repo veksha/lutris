@@ -495,6 +495,11 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
             self.view.destroy()
             logger.debug("View destroyed")
         self.reload_service_media()
+
+        if view_type:
+            self.set_viewtype_icon(view_type)
+            settings.write_setting("view_type", view_type)
+        
         view_class = GameGridView if self.view_type == "grid" else GameListView
         self.view = view_class(self.game_store, self.game_store.service_media)
 
@@ -504,10 +509,6 @@ class LutrisWindow(Gtk.ApplicationWindow):  # pylint: disable=too-many-public-me
             child.destroy()
         self.games_scrollwindow.add(self.view)
         self.connect("view-updated", self.update_store)
-
-        if view_type:
-            self.set_viewtype_icon(view_type)
-            settings.write_setting("view_type", view_type)
 
         self.view.show_all()
         self.update_store()
